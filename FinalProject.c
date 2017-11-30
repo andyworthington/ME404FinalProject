@@ -76,9 +76,10 @@ int main(void) {
 	TIMSK1 |= (1 << OCIE1A);    // Enable Timer 1 compare interrupt
 
 	// Timer 2 Setup (CTC, Ultrasonic)
-	OCR2A = 160;                // 10us with no scaling
+	/*OCR2A = 160;                // 10us with no scaling
 	TCCR2A |= (1 << WGM21);     // Enable Timer 2 compare interrupt
 	TIMSK2 |= (1 << OCIE2A);    // Enable Timer 2 compare interrupt
+	*/
 
 	// Pin Change Setup
 	PCICR  |= (1 << PCIE0);     // Configure Pin Change Interrupt for PB0
@@ -90,17 +91,16 @@ int main(void) {
     // ADC Setup 
     ADCSRA |= ((1 << ADEN) | (1 << ADIE));                  // Enable ADC, Enable Interrupts
     ADCSRA |= ((1 << ADPS0) | (1 << ADPS1) | (1 << ADPS2)); // Configure Prescalar for 125kHz
-    ADMUX  = (1 << REFS0);                                   // Configure for 5V Vcc Reference
+    ADMUX  = (1 << REFS0);                                  // Configure for 5V Vcc Reference
     DIDR0 |= (1 << ADC0D);		                            // Disable digital buffer on PC0
     
 	
-    
 	
 	
     sei();          // ENABLE GLOBAL INTERRUPTS
     //ADCSRA |= (1 << ADSC);  // Start First Conversion
-	PORTC |=  ((1 << PORTC2) | (1 << PORTC4));
-	PORTC &= ~((1 << PORTC3) | (1 << PORTC5));
+	PORTC &= ~((1 << PORTC2) | (1 << PORTC4));
+	PORTC |= ((1 << PORTC3) | (1 << PORTC5));
 
 	TCCR1B |= ((1 << CS11) | (1 << CS10));  // Start timer, waiting 0.2s
 											// before first trigger pulse
@@ -110,15 +110,15 @@ int main(void) {
 			cli();
 			pulseWidth = ICR1;
 			if((pulseWidth < 75)){ 
-				OCR0A = 180;
-				OCR0B = 160;
+				OCR0A = 190;
+				OCR0B = 175;
 			}else if(pulseWidth > 90){ 
-				OCR0A = 180;
-				OCR0B = 200;
+				OCR0A = 190;
+				OCR0B = 205;
 			}
 			else{
-				OCR0A = 180;
-				OCR0B = 180;
+				OCR0A = 190;
+				OCR0B = 190;
 			}
 			sei();
 			}
@@ -139,12 +139,25 @@ ISR(TIMER1_COMPA_vect) {
 	// Main Timer Interrupt//
 	if(state == calculating){
 		state = triggerPulse;
-		PORTD  |=  (1 << PORTD7);          // Pull PD7 High
 		TCCR1B &= ~((1 << CS11) | (1 << CS10)); // Kill Timer 1
-		TCNT2 = 0;
-		TCCR2B |= (1 << CS20);      //Start timer 2, no scaling
+		
+		//new stuff
+		OCR1A = 160;           // Time for 10us
+		TCNT1 = 0;
+		PORTD  |=  (1 << PORTD7);			   // Pull PD7 High
+		TCCR1B |= (1 << CS10); // Start Timer 1, PS 64
+
 	}
-	if(state == distanceTiming){
+		//new
+	else if(state == triggerPulse){
+		state = waitforRise;
+		PORTD  &= ~(1 << PORTD7);   // Pull PD7 Low
+		TCCR1B &= ~(1 << CS10);		// Stop Timer 1
+		PCIFR   =  (1 << PCIF0);    // Clear PC flags
+		PCMSK0 |=  (1 << PCINT0);   // Enable PC Interrupt
+	}
+
+	else if(state == distanceTiming){
 		state = calculating;
 		OCR1A = 12500;  // Time for 50ms
 		TCNT1 = 0;
@@ -154,16 +167,11 @@ ISR(TIMER1_COMPA_vect) {
 	}
 
 }
-
+/*
 ISR(TIMER2_COMPA_vect) {
 	// Timer 2 Compare Interrupt
-	state = waitforRise;
-	TCCR2B &= ~(1 << CS20);     // Kill timer 2
-	PORTD  &= ~(1 << PORTD7);   // Pull PD7 Low
-	PCIFR   =  (1 << PCIF0);    // Clear PC flags
-	PCMSK0 |=  (1 << PCINT0);   // Enable PC Interrupt
 
-}
+}*/
 
 
 ISR(PCINT0_vect){
@@ -172,10 +180,10 @@ ISR(PCINT0_vect){
 	PCMSK0 &= ~(1 << PCINT0);   // Kill PC Interrupt
 	OCR1A = 7500;               // 30ms at prescalar 64
 	TIMSK1 |=  (1 << OCIE1A);   // Enable CTC
-	TIMSK1 |=  (1 << ICIE1);     // Enable Input Capture Interrupt
+	TIMSK1 |=  (1 << ICIE1);    // Enable Input Capture Interrupt
 	TCNT1 = 0;                  // Clear Timer
 	TCCR1B |= ((1 << CS11) | (1 << CS10));  // Start timer, prescalar 64
-	// timing out after 30ms
+											// timing out after 30ms
 }
 
 ISR(TIMER1_CAPT_vect){
