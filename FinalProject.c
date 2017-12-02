@@ -33,7 +33,7 @@
 #include <avr/io.h>      
 #include <inttypes.h>   
 #include <avr/interrupt.h>
-
+#include "lookup.h"
 
 typedef enum driveState{
 	forward, reverse, turnLeft, turnRight,
@@ -52,11 +52,13 @@ volatile uint8_t needsToCalculate = 0;
 volatile uint8_t doneConverting = 0;
 volatile uint16_t ADCin = 0;
 volatile int16_t encCount = 0;
-
+volatile uint8_t milliseconds = 0;
 
 int main(void) {       
 	uint16_t pulseWidth = 0;
-    // GPIO Setup // 
+    
+
+	// GPIO Setup // 
     DDRB &= ~((1 << PORTB1) | (1 << PORTB2) | (1 << PORTB0));
     DDRC |= ((1 << PORTC5)|(1 << PORTC4)|(1 << PORTC3)|(1 << PORTC2));    
 	DDRC &= ~((1 << PORTC0)); 
@@ -76,16 +78,13 @@ int main(void) {
 	TIMSK1 |= (1 << OCIE1A);    // Enable Timer 1 compare interrupt
 
 	// Timer 2 Setup (CTC, Ultrasonic)
-	/*OCR2A = 160;                // 10us with no scaling
+	OCR2A = 250;                // 1ms with PS = 64
 	TCCR2A |= (1 << WGM21);     // Enable Timer 2 compare interrupt
 	TIMSK2 |= (1 << OCIE2A);    // Enable Timer 2 compare interrupt
-	*/
+	
 
 	// Pin Change Setup
 	PCICR  |= (1 << PCIE0);     // Configure Pin Change Interrupt for PB0
-
-	                                  
-	
 
 
     // ADC Setup 
@@ -93,47 +92,34 @@ int main(void) {
     ADCSRA |= ((1 << ADPS0) | (1 << ADPS1) | (1 << ADPS2)); // Configure Prescalar for 125kHz
     ADMUX  = (1 << REFS0);                                  // Configure for 5V Vcc Reference
     DIDR0 |= (1 << ADC0D);		                            // Disable digital buffer on PC0
-    
+	ADCSRA |= (1<<ADATE);									//Enables Auto Trigger
 	
-	
-	
+
     sei();          // ENABLE GLOBAL INTERRUPTS
-    //ADCSRA |= (1 << ADSC);  // Start First Conversion
+    ADCSRA |= (1 << ADSC);  // Start First Conversion
+
 	PORTC &= ~((1 << PORTC2) | (1 << PORTC4));
 	PORTC |= ((1 << PORTC3) | (1 << PORTC5));
+
+	TCCR2B |= (1 << CS22);	//Start Timer 2, triggers every 0.001s, PS = 64
 
 	TCCR1B |= ((1 << CS11) | (1 << CS10));  // Start timer, waiting 0.2s
 											// before first trigger pulse
     while(1){
-		if(needsToCalculate){
-			needsToCalculate = 0;
-			cli();
-			pulseWidth = ICR1;
-			if((pulseWidth < 75)){ 
-				OCR0A = 190;
-				OCR0B = 175;
-			}else if(pulseWidth > 90){ 
-				OCR0A = 190;
-				OCR0B = 205;
-			}
-			else{
-				OCR0A = 190;
-				OCR0B = 190;
-			}
-			sei();
-			}
-        
-    }
+
+		}
+    
     return 0;           
 }
 
 ISR(ADC_vect){
+	ADCin = ADC;
     doneConverting = 1;
 }
 
-//ISR(PCINT1_vect){}
+//ISR(PCINT2_vect){}
 
-//ISR(PCINT2_vect, ISR_ALIASOF(PCINT1_vect))
+//ISR(PCINT1_vect, ISR_ALIASOF(PCINT2_vect))
 
 ISR(TIMER1_COMPA_vect) {
 	// Main Timer Interrupt//
@@ -167,11 +153,11 @@ ISR(TIMER1_COMPA_vect) {
 	}
 
 }
-/*
+
 ISR(TIMER2_COMPA_vect) {
 	// Timer 2 Compare Interrupt
-
-}*/
+	milliseconds++;
+}
 
 
 ISR(PCINT0_vect){
