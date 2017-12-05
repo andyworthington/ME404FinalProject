@@ -34,13 +34,13 @@
 #include <inttypes.h>   
 #include <avr/interrupt.h>
 #include <stdlib.h>
-
+/*
 // This enum. variable describes the current  
 // velocity and direction of the robot's movement.
 typedef enum robotMotion{
 	forward, reverse, turnLeft, turnRight,
 }robotMotion;
-
+*/
 // This enum. variable describes the current  
 // geographical section of Rabbit's Run in which 
 // the robot is moving.
@@ -72,7 +72,7 @@ typedef enum UltrasonicState {
 // Establishing all the global variables required to make this robot function. 
 //
 volatile IRSApproach approachState = LongApproach;
-volatile robotMotion driveState = forward;
+//volatile robotMotion driveState = forward;
 volatile robotLocation legState = Leg1FirstPass;
 volatile UltrasonicState USSstate = calculating;
 // Bools for various processes
@@ -82,7 +82,7 @@ volatile uint8_t doneConverting = 0;
 // Storage Variables
 volatile uint16_t ADCin = 0;
 volatile int16_t encCount = 0;
-
+volatile uint8_t cs = 0;
 //
 //
 //
@@ -93,8 +93,10 @@ volatile int16_t encCount = 0;
 //
 // Functions for Robot Movement
 void forwardWithControl();
-void approachWall(uint8_t inches);
+void approachWall(uint8_t inchesTilCheck);
 void brake();
+void turnRight();
+void turnLeft();
 
 // Conversion Functions
 uint16_t inchesToADC(uint8_t inches); 
@@ -112,14 +114,15 @@ int main(void) {
     DDRC |=  ((1 << PORTC5)|(1 << PORTC4)|(1 << PORTC3)|(1 << PORTC2));    
 	DDRC &= ~((1 << PINC1) | (1 << PINC0)); 
 	DDRD |=  ((1 << PORTD5) | (1 << PORTD6) | (1 << PORTD7));
+	
                                            
           
 
 	// Timer 0 Setup (PCPWM)
 	TCCR0A |= ((1 << COM0A1)| (1 << WGM00)| (1 << COM0B1)); // Configure TOP = 0xFF, Non-Inverting OC
 	TCCR0B |=  (1 << CS00);
-	OCR0A = 200;
-	OCR0B = 200;
+	OCR0A = 180;
+	OCR0B = 180;
 
 	// Timer 1 Setup (CTC, Ultrasonic)
 	OCR1A = 49999;              // 0.2s before first pulse
@@ -127,20 +130,22 @@ int main(void) {
 	TIMSK1 |= (1 << OCIE1A);    // Enable Timer 1 compare interrupt
 
 	// Timer 2 Setup (CTC, Ultrasonic)
-	/*OCR2A = 160;                // 10us with no scaling
+	OCR2A = 157;                // 1ms with PS = 64
 	TCCR2A |= (1 << WGM21);     // Enable Timer 2 compare interrupt
 	TIMSK2 |= (1 << OCIE2A);    // Enable Timer 2 compare interrupt
-	*/
-
+	/*
+	// External Interrupt Setup
+	EICRA  |= (1 << ISC00);    // Configure for Any Edge
+	EIMSK  |= (1 << INT0);*/
 	// Pin Change Setup
 	PCICR  |= ((1 << PCIE0) | (1 << PCIE1));    // Enable Pin Change Interrupt for PB0 & PC0
-	PCMSK1 |= ((1 << PCINT8));					// Configure pin change interrupt for PC0
+	PCMSK1 |= (1 << PCINT8);					// Configure pin change interrupt for PC0
 
     // ADC Setup 
     ADCSRA |= ((1 << ADEN) | (1 << ADIE));                  // Enable ADC, Enable Interrupts
     ADCSRA |= ((1 << ADPS0) | (1 << ADPS1) | (1 << ADPS2)); // Configure Prescalar for 125kHz
     ADMUX  =  (1 << REFS0);                                 // Configure for 5V Vcc Reference
-    ADMUX |= ((1<<MUX2)|(1<<MUX1)|(1<<MUX0));				//Sets channel to ADC7
+    ADMUX |= ((1<<MUX2)|(1<<MUX1)|(1<<MUX0));				//Set channel to ADC7
 										
 	//DIDR0 |=  (1 << ADC0D);		                            // Disable digital buffer on PC0
 
@@ -154,12 +159,19 @@ int main(void) {
 	uint8_t dicks = 1;
     while(1){
 		while(dicks){
-			forwardWithControl();
-			if(encCount > 800){
 			dicks = 0;
-			brake();
-
-			}
+			approachWall(36);
+			turnRight();
+			approachWall(77);
+			turnRight();
+			approachWall(40);
+			turnRight();
+			approachWall(40);
+			turnRight();
+			approachWall(24);
+			turnLeft();
+			approachWall(24);
+			turnRight();
 		}
 		//approachWall(inchesToENC(36));
 	}
@@ -185,15 +197,23 @@ uint16_t inchesToENC(uint8_t inches){
 
 void brake(){
 	PORTC &= ~((1 << PORTC2) | (1 << PORTC3)  | (1 << PORTC4) | (1 << PORTC5));
+
+	TCNT2 = 0;
+	TCCR2B |= ((1 << CS22) | (1 << CS21) | (1 << CS20));	//Start Timer 2, triggers roughly every 0.01s, PS = 1024
+	while(cs < 10){
+		//wait
+	}
+	TCCR2B &= ~((1 << CS22) | (1 << CS21) | (1 << CS20));	//Stop Timer 2
+	cs = 0;
 }
 
-void approachWall(uint8_t inches){
+void approachWall(uint8_t inchesTilCheck){
 // This function moves the robot forward, running parallel to the left wall.
 // After the amount of ticks (from the encoder) speicified by longDistInTicks,
 // the robot will check the forward IR sensor every 1-2 inches (depending on 
 // distance to the wall), and stop when it reaches 4in distance to the wall.  
 
-	uint16_t longDistInTicks = inchesToENC(inches);
+	uint16_t longDistInTicks = inchesToENC(inchesTilCheck);
 	uint16_t minDistInADC = inchesToADC(4);
 	uint8_t wallReached = 0;				 // Assuming wall not reached yet.  
 	uint8_t ADCFreqInTicks = inchesToADC(2); // Two inches by default per ADC conversion.
@@ -225,7 +245,7 @@ void approachWall(uint8_t inches){
 			// when the robot is 16 in. from the wall, increase 
 			// that frequency to 1 conversion per inch travelled. 
 			if((ADCFreqInTicks > 24) && ADCin > 143){
-				ADCFreqInTicks = 24; // 24 ticks = 1 inch 
+				ADCFreqInTicks = 12; // 12 ticks = 1/2 inch 
 			}
 			// When the robot reads 4in. to wall, function ends. 
 			if(ADCin > minDistInADC){ 
@@ -236,7 +256,29 @@ void approachWall(uint8_t inches){
 	brake();
 }
 		
+void turnRight(){
+	brake();
+	encCount = 0;
+	while(encCount < 100){
+		PORTC &= ~((1 << PORTC2) | (1 << PORTC5));
+		PORTC |=  ((1 << PORTC3) | (1 << PORTC4));
+		OCR0A = 180;
+		OCR0B = 180;
+	}
+	brake();
+}
 
+void turnLeft(){
+	brake();
+	encCount = 0;
+	while(encCount > -100){
+		PORTC &= ~((1 << PORTC3) | (1 << PORTC4));
+		PORTC |=  ((1 << PORTC2) | (1 << PORTC5));
+		OCR0A = 180;
+		OCR0B = 180;
+	}
+	brake();
+}
 
 void forwardWithControl(){
 
@@ -253,16 +295,16 @@ void forwardWithControl(){
 		needsToCalculate = 0;
 		cli();
 		pulseWidth = ICR1;
-		if((pulseWidth < 75)){ 
-			OCR0A = 190;
-			OCR0B = 175;
-		}else if(pulseWidth > 90){ 
-			OCR0A = 190;
-			OCR0B = 205;
+		if((pulseWidth < 75)){			//
+			OCR0A = 200;
+			OCR0B = 180;
+		}else if((pulseWidth > 90)  && (pulseWidth < 247)){		//
+			OCR0A = 180;
+			OCR0B = 200;
 		}
 		else{
-			OCR0A = 190;
-			OCR0B = 190;
+			OCR0A = 200;
+			OCR0B = 200;
 		}
 		sei();
 	}
@@ -324,11 +366,11 @@ ISR(TIMER1_COMPA_vect) {
 	}
 
 }
-/*
+
 ISR(TIMER2_COMPA_vect) {
 	// Timer 2 Compare Interrupt
-
-}*/
+	cs++;
+}
 
 
 ISR(PCINT0_vect){
@@ -349,8 +391,19 @@ ISR(TIMER1_CAPT_vect){
 	USSstate = calculating;
 	TIMSK1 &=  ~(1 << ICIE1); // Kill Input Capture Interrupt
 	TIMSK1 |=  (1 << OCIE1A); // Enable CTC
-	OCR1A = 12500;           // Time for 50ms
+	OCR1A = 12500-ICR1;           // Time for 50ms - pulseWidth
 	TCNT1 = 0;               // Clear Timer
 	TCCR1B |= ((1 << CS11) | (1 << CS10)); // Start Timer 1, PS 64
 	needsToCalculate = 1;
 }
+
+/*
+ISR(INT0_vect) {
+	// External Start/Stop Pushbutton Interrupt
+	static uint8_t firstTrigger = 1;
+	
+	// Toggle firstTrigger
+	firstTrigger = firstTrigger == 1 ? 0 : 1;
+
+}
+*/
